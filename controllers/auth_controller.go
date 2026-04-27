@@ -12,7 +12,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-
 func Register(c *fiber.Ctx) error {
 	var req models.Register
 	if err := c.BodyParser(&req); err != nil {
@@ -50,34 +49,31 @@ func Register(c *fiber.Ctx) error {
 	})
 }
 
-
-
 func Login(c *fiber.Ctx) error {
 	var req models.Login
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{
-			"error" : "format tidak valid",
+			"error": "format tidak valid",
 		})
 	}
 
 	var user models.User
 	if err := database.DB.Where("email =?", req.Email).First(&user).Error; err != nil {
 		return c.Status(401).JSON(fiber.Map{
-			"error" : "Email atau Password salah",
+			"error": "Email atau Password salah",
 		})
 	}
 
-	err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password))
-	if err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		return c.Status(401).JSON(fiber.Map{
-			"error" : "Email atau Password salah",
+			"error": "Email atau Password salah",
 		})
 	}
 
 	claims := jwt.MapClaims{
-		"email": user.Email,
+		"email":       user.Email,
 		"customer_id": user.CustomerId,
-		"expired": time.Now().Add(time.Hour *24).Unix(),
+		"expired":     time.Now().Add(time.Hour * 24).Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -91,7 +87,7 @@ func Login(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"status" : true,
-		"token"  : t,
+		"status": true,
+		"token":  t,
 	})
 }
