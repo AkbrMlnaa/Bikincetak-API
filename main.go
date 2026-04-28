@@ -5,6 +5,7 @@ import (
 	"bikincetak-api/routes"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -19,13 +20,16 @@ func main() {
 
 	app := fiber.New()
 
+
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization",}))
+		AllowOrigins:     os.Getenv("FRONTEND_URL"),
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowMethods:     "GET, POST, HEAD, PUT, DELETE, PATCH",
+		AllowCredentials: true,
+	}))
 
 	database.ConnectDB()
 	routes.SetupRoutes(app)
-	
 
 	fmt.Println("Server sedang berjalan di Port: 3000")
 	log.Fatal(app.Listen(":3000"))

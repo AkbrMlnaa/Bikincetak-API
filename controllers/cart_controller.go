@@ -98,9 +98,9 @@ func GetCart(c *fiber.Ctx) error {
 
 func UpdateCartItem(c *fiber.Ctx) error {
 	email := getEmailFromToken(c)
-	itemID := c.Params("id") // ID dari tabel CartItem
+	itemID := c.Params("id") 
 
-	var req models.UpdateCartRequest // Pastikan pakai struct yang baru
+	var req models.UpdateCartRequest 
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Format data tidak valid"})
 	}
@@ -119,11 +119,9 @@ func UpdateCartItem(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Barang tidak ditemukan di keranjang"})
 	}
 
-	// Terapkan perubahan
 	cartItem.Qty = req.Qty
 	cartItem.Notes = req.Notes 
 	
-	// PERBAIKAN FATAL: Update harganya menyesuaikan dengan tier grosir yang baru!
 	if req.Price > 0 {
 		cartItem.Price = req.Price 
 	}
@@ -145,7 +143,6 @@ func DeleteCartItem(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Keranjang tidak ditemukan"})
 	}
 
-	// Hapus item yang sesuai dengan ID dan CartID
 	result := database.DB.Where("id = ? AND cart_id = ?", itemID, cart.ID).Delete(&models.CartItem{})
 	
 	if result.RowsAffected == 0 {

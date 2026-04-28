@@ -99,7 +99,6 @@ func GetItems(c *fiber.Ctx) error {
 
 			fullImageURL := ""
 			if item.Image != "" {
-				// Jaga-jaga jika di ERPNext gambarnya sudah berupa link utuh (http/https)
 				if strings.HasPrefix(item.Image, "http") {
 					fullImageURL = item.Image
 				} else {
