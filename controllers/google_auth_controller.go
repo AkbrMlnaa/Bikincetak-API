@@ -34,7 +34,10 @@ func getGoogleOAuthConfig() *oauth2.Config {
 
 func GoogleLogin(c *fiber.Ctx) error {
 
-	url := getGoogleOAuthConfig().AuthCodeURL("random-state-string")
+	url := getGoogleOAuthConfig().AuthCodeURL(
+		"random-state-string",
+		oauth2.SetAuthURLParam("prompt", "select_account"),
+	)
 	return c.Redirect(url, fiber.StatusTemporaryRedirect)
 }
 
@@ -44,69 +47,70 @@ type GoogleUser struct {
 }
 
 func GoogleCallback(c *fiber.Ctx) error {
-	state := c.Query("state")
-	if state != "random-state-string" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "State invalid"})
-	}
+    state := c.Query("state")
+    if state != "random-state-string" {
+        return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "State invalid"})
+    }
 
-	code := c.Query("code")
-	googleConfig := getGoogleOAuthConfig()
+    code := c.Query("code")
+    googleConfig := getGoogleOAuthConfig()
 
-	tokenRes, err := googleConfig.Exchange(context.Background(), code)
-	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Gagal menukar token dengan Google"})
-	}
+    tokenRes, err := googleConfig.Exchange(context.Background(), code)
+    if err != nil {
+        return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Gagal menukar token dengan Google"})
+    }
 
-	resp, err := http.Get("https://www.googleapis.com/oauth2/v2/userinfo?access_token=" + tokenRes.AccessToken)
-	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Gagal mengambil data profil Google"})
-	}
-	defer resp.Body.Close()
+    // 2. Ambil data profil dari Google
+    resp, err := http.Get("https://www.googleapis.com/oauth2/v2/userinfo?access_token=" + tokenRes.AccessToken)
+    if err != nil {
+        return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Gagal mengambil data profil Google"})
+    }
+    defer resp.Body.Close()
 
-	var googleUser GoogleUser
-	if err := json.NewDecoder(resp.Body).Decode(&googleUser); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Gagal membaca data dari Google"})
-	}
+    var googleUser GoogleUser
+    if err := json.NewDecoder(resp.Body).Decode(&googleUser); err != nil {
+        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Gagal membaca data dari Google"})
+    }
 
-	var user models.User
-	if err := database.DB.Where("email = ?", googleUser.Email).First(&user).Error; err != nil {
+    var user models.User
+    if err := database.DB.Where("email = ?", googleUser.Email).First(&user).Error; err != nil {
 
-		customerID, errERP := erpnext.CreateCustomer(googleUser.Name, googleUser.Email, "")
-		if errERP != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Gagal membuat customer di ERPNext via Google: " + errERP.Error()})
-		}
+        // Buat di ERPNext dulu
+        customerID, errERP := erpnext.CreateCustomer(googleUser.Name, googleUser.Email, "")
+        if errERP != nil {
+            return c.Status(500).JSON(fiber.Map{"error": "Gagal membuat customer di ERPNext via Google: " + errERP.Error()})
+        }
 
-		user = models.User{
-			Email:      googleUser.Email,
-			Password:   "",
-			CustomerId: customerID,
-		}
+        user = models.User{
+            Email:      googleUser.Email,
+            Password:   "",
+            CustomerId: customerID,
+        }
 
-		if createErr := database.DB.Create(&user).Error; createErr != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Gagal mendaftarkan user baru"})
-		}
-	}
+        if createErr := database.DB.Create(&user).Error; createErr != nil {
+            return c.Status(500).JSON(fiber.Map{"error": "Gagal mendaftarkan user baru"})
+        }
+    }
 
-	claims := jwt.MapClaims{
-		"email":       user.Email,
-		"customer_id": user.CustomerId, 
-		"expired":     time.Now().Add(time.Hour * 24).Unix(),
-	}
+    claims := jwt.MapClaims{
+        "email":       user.Email,
+        "customer_id": user.CustomerId, 
+        "expired":     time.Now().Add(time.Hour * 24).Unix(),
+    }
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	secret := os.Getenv("JWT_SECRET")
-	t, errToken := token.SignedString([]byte(secret))
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+    secret := os.Getenv("JWT_SECRET")
+    t, errToken := token.SignedString([]byte(secret))
 
-	if errToken != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "gagal menggenerate token"})
-	}
+    if errToken != nil {
+        return c.Status(500).JSON(fiber.Map{"error": "Gagal menggenerate token"})
+    }
 
+    frontendURL := os.Getenv("FRONTEND_URL")
+    if frontendURL == "" {
+        frontendURL = "http://localhost:5173" 
+    }
 
-	frontendURL := os.Getenv("FRONTEND_URL")
-	if frontendURL == "" {
-		frontendURL = "http://localhost:5173" 
-	}
-
-	redirectURL := fmt.Sprintf("%s/login/success?token=%s", frontendURL, t)
-	return c.Redirect(redirectURL, fiber.StatusFound)
+    redirectURL := fmt.Sprintf("%s/login/success?token=%s", frontendURL, t)
+    return c.Redirect(redirectURL, fiber.StatusFound)
 }
