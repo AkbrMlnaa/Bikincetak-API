@@ -271,47 +271,66 @@ func GetDetailItem(c *fiber.Ctx) error {
 		variant := rawVariant
 
 		go func() {
-			defer wg.Done()
+            defer wg.Done()
 
-			searchTitle := variant.Name + "%"
+            // ==========================================
+            // 🔥 PERBAIKAN: Gunakan variant.Name (Item Code)
+            // ==========================================
+            // variant.Name berisi "PRD-STK-SLK-cromo-10 x 20 cm"
+            // Kita cari posisi tanda strip (-) yang PALING TERAKHIR
+            lastDash := strings.LastIndex(variant.Name, "-")
+            
+            searchBase := variant.Name 
+            if lastDash != -1 {
+                // Potong string-nya, buang bagian ukuran di belakangnya
+                // Hasilnya akan menjadi: "PRD-STK-SLK-cromo"
+                searchBase = variant.Name[:lastDash] 
+            }
+            
+            // Tambahkan % sehingga menjadi "PRD-STK-SLK-cromo%"
+            // Ini akan COCOK dengan "PRD-STK-SLK-cromo - Tier 1 (1-10 pcs)"
+            searchTitle := searchBase + "%"
+            // ==========================================
 
-			prFiltersArray := []interface{}{
-				[]interface{}{"disable", "=", 0},
-				[]interface{}{"title", "like", searchTitle},
-			}
-			prFilterBytes, _ := json.Marshal(prFiltersArray)
+            prFiltersArray := []interface{}{
+                []interface{}{"disable", "=", 0},
+                []interface{}{"title", "like", searchTitle},
+            }
+            prFilterBytes, _ := json.Marshal(prFiltersArray)
 
-			prFields := `["min_qty", "max_qty", "rate"]`
-			prEndpoint := `/api/resource/Pricing Rule?filters=` + url.QueryEscape(string(prFilterBytes)) + `&fields=` + url.QueryEscape(prFields)
+            prFields := `["min_qty", "max_qty", "rate"]`
+            prEndpoint := `/api/resource/Pricing Rule?filters=` + url.QueryEscape(string(prFilterBytes)) + `&fields=` + url.QueryEscape(prFields)
 
-			prRes, prErr := erpnext.ERPNextReq("GET", prEndpoint, nil)
+            prRes, prErr := erpnext.ERPNextReq("GET", prEndpoint, nil)
 
-			rules := []models.PricingRule{}
+            rules := []models.PricingRule{}
 
-			if prErr == nil {
-				var rawRules RawPricingRuleResponse
-				if json.Unmarshal(prRes, &rawRules) == nil {
-					for _, r := range rawRules.Data {
-						rules = append(rules, models.PricingRule{
-							MinQty: r.MinQty,
-							MaxQty: r.MaxQty,
-							Rate:   r.Rate})
-					}
-				}
-			}
+            if prErr == nil {
+                var rawRules RawPricingRuleResponse
+                if json.Unmarshal(prRes, &rawRules) == nil {
+                    for _, r := range rawRules.Data {
+                        rules = append(rules, models.PricingRule{
+                            MinQty: r.MinQty,
+                            MaxQty: r.MaxQty,
+                            Rate:  r.Rate, // Pastikan ini sesuai dengan struct di models.go (Price atau Rate)
+                        })
+                    }
+                }
+            }
 
-			v := models.ItemVariant{
-				VariantName:  variant.ItemName,
-				ItemCode:     variant.Name,
-				UOM:          variant.StockUOM,
-				Description:  variant.Description,
-				PricingRules: rules,
-			}
-			mu.Lock()
-			finalVariants[idx] = v
-			mu.Unlock()
+            v := models.ItemVariant{
+                VariantName:  variant.ItemName,
+                ItemCode:     variant.Name,
+                UOM:          variant.StockUOM,
+                Description:  variant.Description,
+                PricingRules: rules,
+            }
+            
+            mu.Lock()
+            finalVariants[idx] = v
+            mu.Unlock()
 
-		}() 
+        }()
 	}
 
 	wg.Wait()
