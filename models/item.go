@@ -23,9 +23,6 @@ type AttributeValue struct {
 }
 
 
-
-
-
 type ItemVariant struct {
 	VariantName  string        `json:"variant_name"`
 	ItemCode     string        `json:"item_code"`
@@ -38,5 +35,5 @@ type ItemVariant struct {
 type PricingRule struct {
 	MinQty float64 `json:"min_qty"`
 	MaxQty float64 `json:"max_qty"`
-	Price  float64 `json:"price"`
+	Rate  float64 `json:"rate"`
 }

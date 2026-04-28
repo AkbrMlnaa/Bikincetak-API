@@ -13,9 +13,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// ==========================================
-// DTO RAW DATA
-// ==========================================
 type RawItemsResponse struct {
 	Data []struct {
 		Name        string `json:"name"`
@@ -35,7 +32,6 @@ type RawItemDetailResponse struct {
 	} `json:"data"`
 }
 
-// Tambahan DTO untuk mencari Item Code berdasarkan Item Name
 type RawTemplateSearchResponse struct {
 	Data []struct {
 		Name string `json:"name"`
@@ -51,17 +47,20 @@ type RawVariantResponse struct {
 	} `json:"data"`
 }
 
-
-type RawPricingRuleResponse struct {
+type RawPricingRuleItemResponse struct {
 	Data []struct {
-		ItemCode string  `json:"item_code"`
-		MinQty   float64 `json:"min_qty"`
-		MaxQty   float64 `json:"max_qty"`
-		Price    float64 `json:"price"`
+		Parent   string `json:"parent"`
+		ItemCode string `json:"item_code"`
 	} `json:"data"`
 }
 
-
+type RawPricingRuleResponse struct {
+	Data []struct {
+		MinQty float64 `json:"min_qty"`
+		MaxQty float64 `json:"max_qty"`
+		Rate   float64 `json:"rate"`
+	} `json:"data"`
+}
 
 func GetItems(c *fiber.Ctx) error {
 	fieldsParam := `["name","item_name","item_group","image","has_variants","variant_of"]`
@@ -77,7 +76,6 @@ func GetItems(c *fiber.Ctx) error {
 	if err := json.Unmarshal(itemRes, &rawItems); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Gagal parsing data Item"})
 	}
-
 
 	baseURL := os.Getenv("ERPNEXT_URL")
 	baseURL = strings.TrimSuffix(baseURL, "/")
@@ -99,14 +97,12 @@ func GetItems(c *fiber.Ctx) error {
 				}
 			}
 
-
 			fullImageURL := ""
 			if item.Image != "" {
 				// Jaga-jaga jika di ERPNext gambarnya sudah berupa link utuh (http/https)
 				if strings.HasPrefix(item.Image, "http") {
 					fullImageURL = item.Image
 				} else {
-					// Pastikan diawali slash (/) sebelum digabung
 					if !strings.HasPrefix(item.Image, "/") {
 						fullImageURL = baseURL + "/" + item.Image
 					} else {
@@ -118,7 +114,7 @@ func GetItems(c *fiber.Ctx) error {
 			t := &models.ItemTemplate{
 				Name:       item.Name,
 				ItemName:   item.ItemName,
-				ImageURL:   fullImageURL, // <-- Masukkan URL yang sudah jadi di sini
+				ImageURL:   fullImageURL,
 				Attributes: []models.ItemAttribute{},
 			}
 
@@ -211,22 +207,19 @@ func GetItems(c *fiber.Ctx) error {
 	})
 }
 
-
 func GetDetailItem(c *fiber.Ctx) error {
-	// 1. Tangkap dan decode parameter
 	paramItemName, _ := url.QueryUnescape(c.Params("name"))
 	if paramItemName == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Nama template tidak boleh kosong"})
 	}
 
-
 	searchKeyword := "%" + paramItemName + "%"
-	
+
 	tmplFilterArray := []interface{}{
 		[]interface{}{"item_name", "like", searchKeyword},
 	}
 	tmplFilterBytes, _ := json.Marshal(tmplFilterArray)
-	
+
 	tmplEndpoint := `/api/resource/Item?filters=` + url.QueryEscape(string(tmplFilterBytes)) + `&fields=["name"]`
 
 	tmplRes, err := erpnext.ERPNextReq("GET", tmplEndpoint, nil)
@@ -235,7 +228,6 @@ func GetDetailItem(c *fiber.Ctx) error {
 	}
 
 	var tmplSearch RawTemplateSearchResponse
-	
 	if err := json.Unmarshal(tmplRes, &tmplSearch); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Gagal parsing hasil pencarian produk"})
 	}
@@ -246,12 +238,11 @@ func GetDetailItem(c *fiber.Ctx) error {
 
 	actualItemCode := tmplSearch.Data[0].Name
 
-
 	varFilterArray := []interface{}{
 		[]interface{}{"variant_of", "=", actualItemCode},
 	}
 	varFilterBytes, _ := json.Marshal(varFilterArray)
-	
+
 	fieldsParam := `["name","item_name","stock_uom","description"]`
 	variantEndpoint := `/api/resource/Item?filters=` + url.QueryEscape(string(varFilterBytes)) + `&fields=` + url.QueryEscape(fieldsParam)
 
@@ -261,8 +252,6 @@ func GetDetailItem(c *fiber.Ctx) error {
 	}
 
 	var rawVariants RawVariantResponse
-	
-	// ---> INI YANG BARU SAJA DIPERBAIKI <---
 	if err := json.Unmarshal(res, &rawVariants); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Gagal parsing data varian"})
 	}
@@ -271,53 +260,65 @@ func GetDetailItem(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"data": []models.ItemVariant{}})
 	}
 
-	var itemCodes []string
-	for _, v := range rawVariants.Data {
-		itemCodes = append(itemCodes, v.Name)
-	}
+	finalVariants := make([]models.ItemVariant, len(rawVariants.Data))
 
-	prFilterArray := []interface{}{
-		[]interface{}{"item_code", "in", itemCodes},
-	}
-	prFilterBytes, _ := json.Marshal(prFilterArray)
-	prFields := `["item_code","min_qty","max_qty","price"]`
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 
-	prEndpoint := `/api/resource/Pricing Rule?filters=` + url.QueryEscape(string(prFilterBytes)) + `&fields=` + url.QueryEscape(prFields)
-	prRes, prErr := erpnext.ERPNextReq("GET", prEndpoint, nil)
+	for i, rawVariant := range rawVariants.Data {
+		wg.Add(1)
 
-	rulesMap := make(map[string][]models.PricingRule)
-	
-	if prErr == nil {
-		var rawRules RawPricingRuleResponse
-		if json.Unmarshal(prRes, &rawRules) == nil {
-			for _, r := range rawRules.Data {
-				rulesMap[r.ItemCode] = append(rulesMap[r.ItemCode], models.PricingRule{
-					MinQty: r.MinQty,
-					MaxQty: r.MaxQty,
-					Price:  r.Price,
-				})
+		idx := i
+		variant := rawVariant
+
+		go func() {
+			defer wg.Done()
+
+			searchTitle := variant.Name + "%"
+
+			prFiltersArray := []interface{}{
+				[]interface{}{"disable", "=", 0},
+				[]interface{}{"title", "like", searchTitle},
 			}
-		}
+			prFilterBytes, _ := json.Marshal(prFiltersArray)
+
+			prFields := `["min_qty", "max_qty", "rate"]`
+			prEndpoint := `/api/resource/Pricing Rule?filters=` + url.QueryEscape(string(prFilterBytes)) + `&fields=` + url.QueryEscape(prFields)
+
+			prRes, prErr := erpnext.ERPNextReq("GET", prEndpoint, nil)
+
+			rules := []models.PricingRule{}
+
+			if prErr == nil {
+				var rawRules RawPricingRuleResponse
+				if json.Unmarshal(prRes, &rawRules) == nil {
+					for _, r := range rawRules.Data {
+						rules = append(rules, models.PricingRule{
+							MinQty: r.MinQty,
+							MaxQty: r.MaxQty,
+							Rate:   r.Rate})
+					}
+				}
+			}
+
+			v := models.ItemVariant{
+				VariantName:  variant.ItemName,
+				ItemCode:     variant.Name,
+				UOM:          variant.StockUOM,
+				Description:  variant.Description,
+				PricingRules: rules,
+			}
+			mu.Lock()
+			finalVariants[idx] = v
+			mu.Unlock()
+
+		}() 
 	}
 
-	finalVariants := []models.ItemVariant{}
-
-	for _, variant := range rawVariants.Data {
-		vrules := rulesMap[variant.Name]
-		if vrules == nil {
-			vrules = []models.PricingRule{}
-		}
-
-		finalVariants = append(finalVariants, models.ItemVariant{
-			VariantName:  variant.ItemName,
-			ItemCode:     variant.Name,
-			UOM:          variant.StockUOM,
-			Description:  variant.Description,
-			PricingRules: vrules,
-		})
-	}
+	wg.Wait()
 
 	return c.JSON(fiber.Map{
 		"data": finalVariants,
 	})
 }
+
