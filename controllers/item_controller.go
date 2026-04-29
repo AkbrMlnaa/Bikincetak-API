@@ -73,8 +73,8 @@ func GetItems(c *fiber.Ctx) error {
 		var result []models.ItemGroup
 		if errUnmarshal := json.Unmarshal([]byte(cachedData), &result); errUnmarshal == nil {
 			return c.JSON(fiber.Map{
-				"data":   result,
 				"source": "redis",
+				"data":   result,
 			})
 		}
 	} else if err != redis.Nil {
@@ -226,8 +226,8 @@ func GetItems(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"data":   finalData,
 		"source": "erpnext",
+		"data":   finalData,
 	})
 }
 
@@ -244,8 +244,8 @@ func GetDetailItem(c *fiber.Ctx) error {
 		var result []models.ItemVariant
 		if errUnmarshal := json.Unmarshal([]byte(cachedData), &result); errUnmarshal == nil {
 			return c.JSON(fiber.Map{
-				"data":   result,
 				"source": "redis",
+				"data":   result,
 			})
 		}
 	} else if err != redis.Nil {
@@ -374,7 +374,7 @@ func GetDetailItem(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"data":   finalVariants,
 		"source": "erpnext",
+		"data":   finalVariants,
 	})
 }
