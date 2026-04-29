@@ -29,6 +29,7 @@ func main() {
 	}))
 
 	database.ConnectDB()
+	database.ConnectRedis()
 	routes.SetupRoutes(app)
 
 	fmt.Println("Server sedang berjalan di Port: 3000")

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bikincetak-api/database"
 	"bikincetak-api/erpnext"
 	"bikincetak-api/models"
 	"encoding/json"
@@ -9,8 +10,10 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 type RawItemsResponse struct {
@@ -63,6 +66,21 @@ type RawPricingRuleResponse struct {
 }
 
 func GetItems(c *fiber.Ctx) error {
+	redisKey := "items:all_catalog"
+	cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
+
+	if err == nil {
+		var result []models.ItemGroup
+		if errUnmarshal := json.Unmarshal([]byte(cachedData), &result); errUnmarshal == nil {
+			return c.JSON(fiber.Map{
+				"data":   result,
+				"source": "redis",
+			})
+		}
+	} else if err != redis.Nil {
+		fmt.Println("Error baca Redis GetItems:", err)
+	}
+
 	fieldsParam := `["name","item_name","item_group","image","has_variants","variant_of"]`
 	itemEndpoint := `/api/resource/Item?fields=` + url.QueryEscape(fieldsParam) + `&limit=1000`
 
@@ -201,8 +219,15 @@ func GetItems(c *fiber.Ctx) error {
 		finalData = append(finalData, *group)
 	}
 
+	dataToCache, _ := json.Marshal(finalData)
+	// Katalog lengkap disimpan di memori selama 1 jam
+	if errSet := database.Rdb.Set(database.Ctx, redisKey, dataToCache, 1*time.Hour).Err(); errSet != nil {
+		fmt.Println("Peringatan: Gagal menyimpan Katalog ke Redis:", errSet)
+	}
+
 	return c.JSON(fiber.Map{
-		"data": finalData,
+		"data":   finalData,
+		"source": "erpnext",
 	})
 }
 
@@ -210,6 +235,21 @@ func GetDetailItem(c *fiber.Ctx) error {
 	paramItemName, _ := url.QueryUnescape(c.Params("name"))
 	if paramItemName == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "Nama template tidak boleh kosong"})
+	}
+
+	redisKey := "item_detail:" + paramItemName
+	cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
+
+	if err == nil {
+		var result []models.ItemVariant
+		if errUnmarshal := json.Unmarshal([]byte(cachedData), &result); errUnmarshal == nil {
+			return c.JSON(fiber.Map{
+				"data":   result,
+				"source": "redis",
+			})
+		}
+	} else if err != redis.Nil {
+		fmt.Println("Error baca Redis GetDetailItem:", err)
 	}
 
 	searchKeyword := "%" + paramItemName + "%"
@@ -271,77 +311,70 @@ func GetDetailItem(c *fiber.Ctx) error {
 		variant := rawVariant
 
 		go func() {
-            defer wg.Done()
+			defer wg.Done()
 
-            // ==========================================
-            // 🔥 PERBAIKAN: SMART TRIM (Deteksi Ukuran)
-            // ==========================================
-            searchBase := variant.Name 
-            lastDash := strings.LastIndex(variant.Name, "-")
-            
-            if lastDash != -1 {
-                // Ambil potongan teks setelah strip terakhir
-                lastPart := variant.Name[lastDash+1:]
-                
-                // Cek apakah potongannya mengandung spasi " x " (contoh: 10 x 20 cm)
-                // Kamu juga bisa tambahkan || strings.Contains(lastPart, "cm") jika perlu
-                if strings.Contains(lastPart, " x ") {
-                    // Ini adalah ukuran, jadi kita BUANG bagian belakangnya
-                    // Contoh: PRD-STK-cromo-10 x 20 cm -> PRD-STK-cromo
-                    searchBase = variant.Name[:lastDash] 
-                }
-                // JIKA BUKAN ukuran (contoh: "art paper 150"), block ini dilewati
-                // sehingga searchBase TETAP UTUH: "PRD-DPD-A1-art paper 150"
-            }
-            
-            searchTitle := searchBase + "%"
-            // ==========================================
+			searchBase := variant.Name
+			lastDash := strings.LastIndex(variant.Name, "-")
 
-            prFiltersArray := []interface{}{
-                []interface{}{"disable", "=", 0},
-                []interface{}{"title", "like", searchTitle},
-            }
-            prFilterBytes, _ := json.Marshal(prFiltersArray)
+			if lastDash != -1 {
+				lastPart := variant.Name[lastDash+1:]
+				if strings.Contains(lastPart, " x ") {
+					searchBase = variant.Name[:lastDash]
+				}
+			}
 
-            prFields := `["min_qty", "max_qty", "rate"]`
-            prEndpoint := `/api/resource/Pricing Rule?filters=` + url.QueryEscape(string(prFilterBytes)) + `&fields=` + url.QueryEscape(prFields)
+			searchTitle := searchBase + "%"
 
-            prRes, prErr := erpnext.ERPNextReq("GET", prEndpoint, nil)
+			prFiltersArray := []interface{}{
+				[]interface{}{"disable", "=", 0},
+				[]interface{}{"title", "like", searchTitle},
+			}
+			prFilterBytes, _ := json.Marshal(prFiltersArray)
 
-            rules := []models.PricingRule{}
+			prFields := `["min_qty", "max_qty", "rate"]`
+			prEndpoint := `/api/resource/Pricing Rule?filters=` + url.QueryEscape(string(prFilterBytes)) + `&fields=` + url.QueryEscape(prFields)
 
-            if prErr == nil {
-                var rawRules RawPricingRuleResponse
-                if json.Unmarshal(prRes, &rawRules) == nil {
-                    for _, r := range rawRules.Data {
-                        rules = append(rules, models.PricingRule{
-                            MinQty: r.MinQty,
-                            MaxQty: r.MaxQty,
-                            Rate:   r.Rate,
-                        })
-                    }
-                }
-            }
+			prRes, prErr := erpnext.ERPNextReq("GET", prEndpoint, nil)
 
-            v := models.ItemVariant{
-                VariantName:  variant.ItemName,
-                ItemCode:     variant.Name,
-                UOM:          variant.StockUOM,
-                Description:  variant.Description,
-                PricingRules: rules,
-            }
-            
-            mu.Lock()
-            finalVariants[idx] = v
-            mu.Unlock()
+			rules := []models.PricingRule{}
 
-        }()
+			if prErr == nil {
+				var rawRules RawPricingRuleResponse
+				if json.Unmarshal(prRes, &rawRules) == nil {
+					for _, r := range rawRules.Data {
+						rules = append(rules, models.PricingRule{
+							MinQty: r.MinQty,
+							MaxQty: r.MaxQty,
+							Rate:   r.Rate,
+						})
+					}
+				}
+			}
+
+			v := models.ItemVariant{
+				VariantName:  variant.ItemName,
+				ItemCode:     variant.Name,
+				UOM:          variant.StockUOM,
+				Description:  variant.Description,
+				PricingRules: rules,
+			}
+
+			mu.Lock()
+			finalVariants[idx] = v
+			mu.Unlock()
+
+		}()
 	}
 
 	wg.Wait()
 
+	dataToCache, _ := json.Marshal(finalVariants)
+	if errSet := database.Rdb.Set(database.Ctx, redisKey, dataToCache, 1*time.Hour).Err(); errSet != nil {
+		fmt.Println("Peringatan: Gagal menyimpan Detail Item ke Redis:", errSet)
+	}
+
 	return c.JSON(fiber.Map{
-		"data": finalVariants,
+		"data":   finalVariants,
+		"source": "erpnext",
 	})
 }
-
