@@ -274,21 +274,26 @@ func GetDetailItem(c *fiber.Ctx) error {
             defer wg.Done()
 
             // ==========================================
-            // 🔥 PERBAIKAN: Gunakan variant.Name (Item Code)
+            // 🔥 PERBAIKAN: SMART TRIM (Deteksi Ukuran)
             // ==========================================
-            // variant.Name berisi "PRD-STK-SLK-cromo-10 x 20 cm"
-            // Kita cari posisi tanda strip (-) yang PALING TERAKHIR
+            searchBase := variant.Name 
             lastDash := strings.LastIndex(variant.Name, "-")
             
-            searchBase := variant.Name 
             if lastDash != -1 {
-                // Potong string-nya, buang bagian ukuran di belakangnya
-                // Hasilnya akan menjadi: "PRD-STK-SLK-cromo"
-                searchBase = variant.Name[:lastDash] 
+                // Ambil potongan teks setelah strip terakhir
+                lastPart := variant.Name[lastDash+1:]
+                
+                // Cek apakah potongannya mengandung spasi " x " (contoh: 10 x 20 cm)
+                // Kamu juga bisa tambahkan || strings.Contains(lastPart, "cm") jika perlu
+                if strings.Contains(lastPart, " x ") {
+                    // Ini adalah ukuran, jadi kita BUANG bagian belakangnya
+                    // Contoh: PRD-STK-cromo-10 x 20 cm -> PRD-STK-cromo
+                    searchBase = variant.Name[:lastDash] 
+                }
+                // JIKA BUKAN ukuran (contoh: "art paper 150"), block ini dilewati
+                // sehingga searchBase TETAP UTUH: "PRD-DPD-A1-art paper 150"
             }
             
-            // Tambahkan % sehingga menjadi "PRD-STK-SLK-cromo%"
-            // Ini akan COCOK dengan "PRD-STK-SLK-cromo - Tier 1 (1-10 pcs)"
             searchTitle := searchBase + "%"
             // ==========================================
 
@@ -312,7 +317,7 @@ func GetDetailItem(c *fiber.Ctx) error {
                         rules = append(rules, models.PricingRule{
                             MinQty: r.MinQty,
                             MaxQty: r.MaxQty,
-                            Rate:  r.Rate, // Pastikan ini sesuai dengan struct di models.go (Price atau Rate)
+                            Rate:   r.Rate,
                         })
                     }
                 }
