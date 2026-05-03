@@ -12,12 +12,14 @@ func SetupRoutes(app *fiber.App)  {
 
 	api.Get("/items", controllers.GetItems)
 	api.Get("/items/:name", controllers.GetDetailItem)
+	api.Post("/payment", controllers.PaymentCallback)
 
 	auth:= api.Group("auth")
 	auth.Post("/register", controllers.Register)
 	auth.Post("/login", controllers.Login)
 	auth.Get("google/login", controllers.GoogleLogin)
 	auth.Get("google/callback", controllers.GoogleCallback)
+
 
 	api.Use(middleware.Protected())
 	
@@ -26,5 +28,6 @@ func SetupRoutes(app *fiber.App)  {
 	api.Put("cart/:id", controllers.UpdateCartItem)     
 	api.Delete("cart/:id", controllers.DeleteCartItem)
 	api.Post("/order", controllers.CreateOrder)
+	api.Post("/address", controllers.AddCustomerAddress)
 
 }

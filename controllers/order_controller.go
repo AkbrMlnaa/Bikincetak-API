@@ -1,179 +1,187 @@
 package controllers
 
 import (
-	"bikincetak-api/database"
+	"bikincetak-api/config"
 	"bikincetak-api/erpnext"
 	"bikincetak-api/models"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/midtrans/midtrans-go"
+	"github.com/midtrans/midtrans-go/snap"
 )
 
-
 func CreateOrder(c *fiber.Ctx) error {
+	var req models.CheckoutRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Format request tidak valid"})
+	}
+
 	userToken, ok := c.Locals("user").(*jwt.Token)
 	if !ok || userToken == nil {
-		return c.Status(401).JSON(fiber.Map{"error": "Akses ditolak, token tidak ditemukan di sistem."})
+		return c.Status(401).JSON(fiber.Map{"error": "Akses ditolak, token tidak valid."})
 	}
-
 	claims, ok := userToken.Claims.(jwt.MapClaims)
 	if !ok {
-		return c.Status(401).JSON(fiber.Map{"error": "Gagal membaca struktur token."})
+		return c.Status(401).JSON(fiber.Map{"error": "Gagal membaca token."})
 	}
+	customerEmail := fmt.Sprintf("%v", claims["email"])
+	customerID := fmt.Sprintf("%v", claims["customer_id"])
 
-	var customerID string
-	if claims["customer_id"] != nil {
-		customerID = fmt.Sprintf("%v", claims["customer_id"])
-	}
+	var grossAmount int64 = 0
+	var midtransItems []midtrans.ItemDetails
+	var erpItems []map[string]interface{}
 
-	if customerID == "" {
-		return c.Status(400).JSON(fiber.Map{
-			"error": "Customer ID tidak ditemukan di dalam token. Pastikan Anda Login menggunakan versi API terbaru!",
+	for _, item := range req.Items {
+		grossAmount += int64(item.Rate) * int64(item.Qty)
+
+		midtransItems = append(midtransItems, midtrans.ItemDetails{
+			ID:    item.ItemCode,
+			Name:  item.ItemName,
+			Price: int64(item.Rate),
+			Qty:   int32(item.Qty),
+		})
+
+		erpItems = append(erpItems, map[string]interface{}{
+			"item_code": item.ItemCode,
+			"qty":       item.Qty,
+			"rate":      item.Rate,
 		})
 	}
 
-	var req models.CheckoutRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Format pesanan tidak valid"})
+	var wg sync.WaitGroup
+	var erpAddress models.ERPNextAddressResponse
+	var customerName string
+	var errFetch error
+
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		resAddress, errAddr := erpnext.ERPNextReq("GET", "/api/resource/Address/"+req.AddressName, nil)
+		if errAddr != nil {
+			errFetch = errAddr
+			return
+		}
+		json.Unmarshal(resAddress, &erpAddress)
+	}()
+
+	go func() {
+		defer wg.Done()
+		resCust, errCust := erpnext.ERPNextReq("GET", "/api/resource/Customer/"+customerID, nil)
+		if errCust != nil {
+			errFetch = errCust
+			return
+		}
+
+		var custData map[string]interface{}
+		if err := json.Unmarshal(resCust, &custData); err == nil {
+			if data, ok := custData["data"].(map[string]interface{}); ok {
+				if name, ok := data["customer_name"].(string); ok {
+					customerName = name
+				}
+			}
+		}
+	}()
+
+	wg.Wait() 
+
+	if errFetch != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Gagal mengambil data alamat/customer dari sistem"})
+	}
+
+	addr := erpAddress.Data
+	if customerName == "" {
+		customerName = customerID 
 	}
 
 	deliveryDate := time.Now().AddDate(0, 0, 7).Format("2006-01-02")
-	transactionDate := time.Now().Format("2006-01-02")
-
-	var soItems []map[string]interface{}
-	for _, item := range req.Items {
-		soItems = append(soItems, map[string]interface{}{
-			"item_code":     item.ItemCode,
-			"qty":           item.Qty,
-			"rate":          item.Rate,
-			"delivery_date": deliveryDate,
-		})
-	}
-
-	payload := map[string]interface{}{
-		"customer":         customerID, 
-		"transaction_date": transactionDate,
+	soPayload := map[string]interface{}{
+		"customer":         customerID,
+		"items":            erpItems,
+		"customer_address": req.AddressName,
 		"delivery_date":    deliveryDate,
-		"items":            soItems,
-		"docstatus":        0,  
 	}
 
-	payloadBytes, _ := json.Marshal(payload)
+	soPayloadBytes, _ := json.Marshal(soPayload)
+	resSO, errSO := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", soPayloadBytes)
 
-	res, errERP := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", payloadBytes)
-	if errERP != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Gagal menghubungi server ERPNext"})
+	if errSO != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Gagal membuat pesanan di sistem ERP"})
+	}
+
+	if strings.Contains(string(resSO), "exc_type") {
+		return c.Status(400).JSON(fiber.Map{"error": "ERPNext menolak pesanan. Cek kelengkapan data."})
 	}
 
 	var soRes models.SalesOrderResponse
-	if errUnmarshal := json.Unmarshal(res, &soRes); errUnmarshal != nil || soRes.Data.Name == "" {
-		fmt.Println("[ERROR ERPNEXT]:", string(res)) 
-		return c.Status(500).JSON(fiber.Map{"error": "Gagal membuat pesanan di server pusat"})
+	if err := json.Unmarshal(resSO, &soRes); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Gagal membaca ID Pesanan dari ERPNext"})
 	}
 
-	redisKey := "cart:" + customerID 
-	database.Rdb.Del(database.Ctx, redisKey)
+	orderID := soRes.Data.Name
 
-	return c.Status(201).JSON(fiber.Map{
-		"message":  "Pesanan berhasil dibuat!",
-		"id_order": soRes.Data.Name,
-		"status":   "Draft",
+	billAddress := &midtrans.CustomerAddress{
+		FName:       customerName,
+		Phone:       addr.Phone,
+		Address:     addr.AddressLine1,
+		City:        addr.City,
+		Postcode:    addr.Pincode,
+		CountryCode: "IDN",
+	}
+
+	shipAddress := &midtrans.CustomerAddress{
+		FName:       addr.AddressTitle,
+		Phone:       addr.Phone,
+		Address:     addr.AddressLine1,
+		City:        addr.City,
+		Postcode:    addr.Pincode,
+		CountryCode: "IDN",
+	}
+
+	snapReq := &snap.Request{
+		TransactionDetails: midtrans.TransactionDetails{
+			OrderID:  orderID,
+			GrossAmt: grossAmount,
+		},
+		Items: &midtransItems,
+		CustomerDetail: &midtrans.CustomerDetails{
+			FName:    customerName,
+			Email:    customerEmail,
+			Phone:    addr.Phone,
+			BillAddr: billAddress, 
+			ShipAddr: shipAddress, 
+		},
+	}
+
+	snapResp, errMidtrans := config.SnapClient.CreateTransaction(snapReq)
+	if errMidtrans != nil {
+		
+		return c.Status(500).JSON(fiber.Map{"error": "Gagal memproses pembayaran"})
+	}
+
+	return c.Status(200).JSON(fiber.Map{
+		"message":     "Pesanan berhasil dibuat",
+		"order_id":    orderID,
+		"payment_url": snapResp.RedirectURL,
+		"snap_token":  snapResp.Token,
 	})
 }
 
-// func CreateOrder(c *fiber.Ctx) error {
+func PaymentCallback(c *fiber.Ctx) error {
+	var notificationPayload map[string]interface{}
 
-// 	authHeader := c.Get("Authorization")
-	
-// 	// Cek apakah header kosong
-// 	if authHeader == "" {
-// 		return c.Status(401).JSON(fiber.Map{"error": "Akses ditolak. Header Authorization kosong."})
-// 	}
+	if err := c.BodyParser(&notificationPayload); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Format data tidak valid"})
+	}
 
-// 	// Cek apakah formatnya "Bearer <token>"
-// 	if !strings.HasPrefix(authHeader, "Bearer ") {
-// 		return c.Status(401).JSON(fiber.Map{"error": "Format token salah. Harus berawalan 'Bearer '"})
-// 	}
+	payloadJSON, _ := json.MarshalIndent(notificationPayload, "", "  ")
+	fmt.Println(string(payloadJSON))
 
-// 	// Ambil token aslinya (buang kata "Bearer ")
-// 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-// 	secret := os.Getenv("JWT_SECRET")
-
-// 	// Parsing dan Validasi Token
-// 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-// 		return []byte(secret), nil
-// 	})
-
-// 	if err != nil || !token.Valid {
-// 		fmt.Println("❌ [JWT ERROR]:", err) 
-// 		return c.Status(401).JSON(fiber.Map{"error": "Akses ditolak. Token tidak valid atau sudah kedaluwarsa."})
-// 	}
-
-// 	// Ekstrak data dari dalam token
-// 	claims, ok := token.Claims.(jwt.MapClaims)
-// 	if !ok {
-// 		return c.Status(401).JSON(fiber.Map{"error": "Gagal membaca struktur token"})
-// 	}
-
-// 	// Ambil customer_id (menggunakan fmt.Sprintf agar aman dari error beda tipe data)
-// 	customerID := fmt.Sprintf("%v", claims["customer_id"])
-// 	if customerID == "" || customerID == "<nil>" {
-// 		return c.Status(400).JSON(fiber.Map{"error": "Customer ID tidak ditemukan di dalam token!"})
-// 	}
-
-// 	// ==========================================
-// 	// 🛒 2. PROSES PEMBUATAN SALES ORDER
-// 	// ==========================================
-// 	var req models.CheckoutRequest
-// 	if err := c.BodyParser(&req); err != nil {
-// 		return c.Status(400).JSON(fiber.Map{"error": "Format pesanan tidak valid"})
-// 	}
-
-// 	// Set tanggal pengiriman default (misal hari ini + 3 hari)
-// 	deliveryDate := time.Now().AddDate(0, 0, 3).Format("2006-01-02")
-// 	transactionDate := time.Now().Format("2006-01-02")
-
-// 	// Mapping item dari request Frontend ke format ERPNext
-// 	var soItems []map[string]interface{}
-// 	for _, item := range req.Items {
-// 		soItems = append(soItems, map[string]interface{}{
-// 			"item_code":     item.ItemCode,
-// 			"qty":           item.Qty,
-// 			"rate":          item.Rate,
-// 			"delivery_date": deliveryDate,
-// 		})
-// 	}
-
-// 	payload := map[string]interface{}{
-// 		"customer":         customerID, // Didapat dari token JWT
-// 		"transaction_date": transactionDate,
-// 		"delivery_date":    deliveryDate,
-// 		"items":            soItems,
-// 		"docstatus":        0, // 0 = Draft
-// 		"naming_series":    "SO-", // Sesuaikan Naming Series di ERPNext-mu
-// 	}
-
-// 	payloadBytes, _ := json.Marshal(payload)
-
-// 	res, errERP := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", payloadBytes)
-// 	if errERP != nil {
-// 		return c.Status(500).JSON(fiber.Map{"error": "Gagal menghubungi server ERPNext"})
-// 	}
-
-// 	var soRes models.SalesOrderResponse
-// 	// Cek apakah balasan sukses dengan melihat IdOrder (yang tag json-nya "name")
-// 	if errUnmarshal := json.Unmarshal(res, &soRes); errUnmarshal != nil || soRes.Data.Name == "" {
-// 		fmt.Println("❌ [ERROR ERPNEXT]:", string(res)) // CCTV Terminal untuk ERPNext
-// 		return c.Status(500).JSON(fiber.Map{"error": "Gagal membuat pesanan di server pusat"})
-// 	}
-
-// 	// Balikkan response sukses ke Frontend
-// 	return c.Status(201).JSON(fiber.Map{
-// 		"message":  "Pesanan berhasil dibuat!",
-// 		"id_order": soRes.Data.Name,
-// 		"status":   "Draft",
-// 	})
-// }
+	return c.SendStatus(200)
+}

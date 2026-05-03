@@ -8,3 +8,4 @@ type User struct{
 	Password	string `gorm:"not null"`
 	CustomerId	string `gorm:"not null"`
 }
+
