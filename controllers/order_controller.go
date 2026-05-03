@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bikincetak-api/config"
+	"bikincetak-api/database"
 	"bikincetak-api/erpnext"
 	"bikincetak-api/models"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/midtrans/midtrans-go"
 	"github.com/midtrans/midtrans-go/snap"
+	"github.com/redis/go-redis/v9"
 )
 
 func CreateOrder(c *fiber.Ctx) error {
@@ -89,7 +91,7 @@ func CreateOrder(c *fiber.Ctx) error {
 		}
 	}()
 
-	wg.Wait() 
+	wg.Wait()
 
 	if errFetch != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Gagal mengambil data alamat/customer dari sistem"})
@@ -97,7 +99,7 @@ func CreateOrder(c *fiber.Ctx) error {
 
 	addr := erpAddress.Data
 	if customerName == "" {
-		customerName = customerID 
+		customerName = customerID
 	}
 
 	deliveryDate := time.Now().AddDate(0, 0, 7).Format("2006-01-02")
@@ -108,23 +110,14 @@ func CreateOrder(c *fiber.Ctx) error {
 		"delivery_date":    deliveryDate,
 	}
 
+	tempOrderID := fmt.Sprintf("TRX-%d", time.Now().Unix())
 	soPayloadBytes, _ := json.Marshal(soPayload)
-	resSO, errSO := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", soPayloadBytes)
+	redisKey := "order_payload:" + tempOrderID
 
-	if errSO != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Gagal membuat pesanan di sistem ERP"})
+	if errSet := database.Rdb.Set(database.Ctx, redisKey, soPayloadBytes, 24*time.Hour).Err(); errSet != nil {
+		fmt.Println("Error set Redis:", errSet)
+		return c.Status(500).JSON(fiber.Map{"error": "Gagal menyimpan sesi keranjang belanja"})
 	}
-
-	if strings.Contains(string(resSO), "exc_type") {
-		return c.Status(400).JSON(fiber.Map{"error": "ERPNext menolak pesanan. Cek kelengkapan data."})
-	}
-
-	var soRes models.SalesOrderResponse
-	if err := json.Unmarshal(resSO, &soRes); err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Gagal membaca ID Pesanan dari ERPNext"})
-	}
-
-	orderID := soRes.Data.Name
 
 	billAddress := &midtrans.CustomerAddress{
 		FName:       customerName,
@@ -146,7 +139,7 @@ func CreateOrder(c *fiber.Ctx) error {
 
 	snapReq := &snap.Request{
 		TransactionDetails: midtrans.TransactionDetails{
-			OrderID:  orderID,
+			OrderID:  tempOrderID,
 			GrossAmt: grossAmount,
 		},
 		Items: &midtransItems,
@@ -154,34 +147,62 @@ func CreateOrder(c *fiber.Ctx) error {
 			FName:    customerName,
 			Email:    customerEmail,
 			Phone:    addr.Phone,
-			BillAddr: billAddress, 
-			ShipAddr: shipAddress, 
+			BillAddr: billAddress,
+			ShipAddr: shipAddress,
 		},
 	}
 
 	snapResp, errMidtrans := config.SnapClient.CreateTransaction(snapReq)
 	if errMidtrans != nil {
-		
-		return c.Status(500).JSON(fiber.Map{"error": "Gagal memproses pembayaran"})
+		fmt.Println("Error Midtrans:", errMidtrans.Error())
+		return c.Status(500).JSON(fiber.Map{"error": "Gagal memproses pembayaran ke gerbang pembayaran"})
 	}
 
 	return c.Status(200).JSON(fiber.Map{
 		"message":     "Pesanan berhasil dibuat",
-		"order_id":    orderID,
+		"order_id":    tempOrderID,
 		"payment_url": snapResp.RedirectURL,
 		"snap_token":  snapResp.Token,
 	})
 }
 
-func PaymentCallback(c *fiber.Ctx) error {
-	var notificationPayload map[string]interface{}
 
-	if err := c.BodyParser(&notificationPayload); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Format data tidak valid"})
+func MidtransWebhook(c *fiber.Ctx) error {
+	var notification map[string]interface{}
+	if err := c.BodyParser(&notification); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Format notifikasi tidak valid"})
 	}
 
-	payloadJSON, _ := json.MarshalIndent(notificationPayload, "", "  ")
-	fmt.Println(string(payloadJSON))
+	orderID, _ := notification["order_id"].(string)
+	transactionStatus, _ := notification["transaction_status"].(string)
+
+	if orderID == "" || transactionStatus == "" {
+		return c.SendStatus(200)
+	}
+
+	if transactionStatus == "capture" || transactionStatus == "settlement" {
+		redisKey := "order_payload:" + orderID
+
+		cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
+		if err == redis.Nil {
+			fmt.Println("⚠️ Webhook masuk, tapi data Redis tidak ada untuk:", orderID)
+			return c.SendStatus(200)
+		} else if err != nil {
+			fmt.Println("Error baca Redis di Webhook:", err)
+			return c.SendStatus(200)
+		}
+
+		resSO, errSO := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", []byte(cachedData))
+
+		if errSO != nil || strings.Contains(string(resSO), "exc_type") {
+			fmt.Println("❌ GAGAL MEMBUAT SO DARI WEBHOOK. Respons ERPNext:", string(resSO))
+			return c.SendStatus(200)
+		}
+
+		database.Rdb.Del(database.Ctx, redisKey)
+
+		fmt.Println("✅ [SUKSES] Pesanan Lunas & Sales Order Berhasil Dibuat di ERPNext! ID Transaksi:", orderID)
+	}
 
 	return c.SendStatus(200)
 }

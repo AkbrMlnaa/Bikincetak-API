@@ -12,7 +12,7 @@ func SetupRoutes(app *fiber.App)  {
 
 	api.Get("/items", controllers.GetItems)
 	api.Get("/items/:name", controllers.GetDetailItem)
-	api.Post("/payment", controllers.PaymentCallback)
+	api.Post("/webhook/midtrans", controllers.MidtransWebhook)
 
 	auth:= api.Group("auth")
 	auth.Post("/register", controllers.Register)
@@ -28,6 +28,10 @@ func SetupRoutes(app *fiber.App)  {
 	api.Put("cart/:id", controllers.UpdateCartItem)     
 	api.Delete("cart/:id", controllers.DeleteCartItem)
 	api.Post("/order", controllers.CreateOrder)
-	api.Post("/address", controllers.AddCustomerAddress)
 
+	user := api.Group("user")
+	user.Post("/address", controllers.AddCustomerAddress)
+	user.Get("/address", controllers.GetCustomerAddresses)
+	user.Put("/address/:name", controllers.UpdateCustomerAddress)
+	user.Delete("/address/:name", controllers.DeleteCustomerAddress)
 }

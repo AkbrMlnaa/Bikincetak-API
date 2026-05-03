@@ -15,3 +15,10 @@ type AddAddressRequest struct {
 	ProvinceID    string `json:"province_id"`    
 	SubdistrictID string `json:"subdistrict_id"` 
 }
+
+type UpdateAddressRequest struct {
+	AddressLine1 string `json:"address_line1"`
+	City         string `json:"city"`
+	Phone        string `json:"phone"`
+	Postcode     string `json:"postcode"`
+}
