@@ -29,6 +29,13 @@ type ItemVariant struct {
 	UOM          string        `json:"uom"`
 	Description  string        `json:"description"`
 	PricingRules []PricingRule `json:"pricing_rules"`
+	VariantLainnya []VariantLainnya `json:"variant_lainnya"`
+}
+
+type VariantLainnya struct {
+	ItemCode    string  `json:"item_code"`
+	NameVariant string  `json:"name_variant"`
+	Price       float64 `json:"price"`
 }
 
 

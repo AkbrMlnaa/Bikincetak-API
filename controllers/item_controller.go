@@ -73,7 +73,6 @@ func GetItems(c *fiber.Ctx) error {
 		var result []models.ItemGroup
 		if errUnmarshal := json.Unmarshal([]byte(cachedData), &result); errUnmarshal == nil {
 			return c.JSON(fiber.Map{
-				"source": "redis",
 				"data":   result,
 			})
 		}
@@ -220,13 +219,11 @@ func GetItems(c *fiber.Ctx) error {
 	}
 
 	dataToCache, _ := json.Marshal(finalData)
-	// Katalog lengkap disimpan di memori selama 1 jam
 	if errSet := database.Rdb.Set(database.Ctx, redisKey, dataToCache, 1*time.Hour).Err(); errSet != nil {
 		fmt.Println("Peringatan: Gagal menyimpan Katalog ke Redis:", errSet)
 	}
 
 	return c.JSON(fiber.Map{
-		"source": "erpnext",
 		"data":   finalData,
 	})
 }
@@ -244,8 +241,7 @@ func GetDetailItem(c *fiber.Ctx) error {
 		var result []models.ItemVariant
 		if errUnmarshal := json.Unmarshal([]byte(cachedData), &result); errUnmarshal == nil {
 			return c.JSON(fiber.Map{
-				"source": "redis",
-				"data":   result,
+				"data": result,
 			})
 		}
 	} else if err != redis.Nil {
@@ -337,7 +333,6 @@ func GetDetailItem(c *fiber.Ctx) error {
 			prRes, prErr := erpnext.ERPNextReq("GET", prEndpoint, nil)
 
 			rules := []models.PricingRule{}
-
 			if prErr == nil {
 				var rawRules RawPricingRuleResponse
 				if json.Unmarshal(prRes, &rawRules) == nil {
@@ -351,12 +346,32 @@ func GetDetailItem(c *fiber.Ctx) error {
 				}
 			}
 
+			addons := []models.VariantLainnya{}
+			itemDocEndpoint := `/api/resource/Item/` + url.PathEscape(variant.Name)
+			itemRes, errItem := erpnext.ERPNextReq("GET", itemDocEndpoint, nil)
+
+			if errItem == nil {
+				fmt.Println(string(itemRes))
+				var fullItem struct {
+					Data struct {
+						DaftarVariant []models.VariantLainnya `json:"custom_daftar_variant"`
+					} `json:"data"`
+				}
+
+				if err := json.Unmarshal(itemRes, &fullItem); err == nil {
+					if fullItem.Data.DaftarVariant != nil {
+						addons = fullItem.Data.DaftarVariant
+					}
+				}
+			}
+
 			v := models.ItemVariant{
-				VariantName:  variant.ItemName,
-				ItemCode:     variant.Name,
-				UOM:          variant.StockUOM,
-				Description:  variant.Description,
-				PricingRules: rules,
+				VariantName:    variant.ItemName,
+				ItemCode:       variant.Name,
+				UOM:            variant.StockUOM,
+				Description:    variant.Description,
+				PricingRules:   rules,
+				VariantLainnya: addons, 
 			}
 
 			mu.Lock()
@@ -374,7 +389,6 @@ func GetDetailItem(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"source": "erpnext",
-		"data":   finalVariants,
+		"data": finalVariants,
 	})
 }
