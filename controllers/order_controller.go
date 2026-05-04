@@ -180,9 +180,11 @@ func MidtransWebhook(c *fiber.Ctx) error {
 		return c.SendStatus(200)
 	}
 
+	// Midtrans mengirim status "capture" (kartu kredit) atau "settlement" (transfer/VA) jika lunas
 	if transactionStatus == "capture" || transactionStatus == "settlement" {
 		redisKey := "order_payload:" + orderID
 
+		// Ambil data keranjang dari Redis
 		cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
 		if err == redis.Nil {
 			fmt.Println("⚠️ Webhook masuk, tapi data Redis tidak ada untuk:", orderID)
@@ -192,7 +194,19 @@ func MidtransWebhook(c *fiber.Ctx) error {
 			return c.SendStatus(200)
 		}
 
-		resSO, errSO := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", []byte(cachedData))
+		// 1. Buka bungkus data Redis untuk disisipi info pembayaran
+		var payloadMap map[string]interface{}
+		json.Unmarshal([]byte(cachedData), &payloadMap)
+
+		// 2. Sisipkan ID Transaksi Midtrans ke kolom PO No (Customer Reference)
+		// Ini berfungsi sebagai bukti kuat bahwa pesanan ini sudah LUNAS via sistem
+		payloadMap["po_no"] = orderID
+
+		// 3. Bungkus kembali menjadi JSON
+		finalPayloadBytes, _ := json.Marshal(payloadMap)
+
+		// 4. Tembak ERPNext untuk Membuat Sales Order (Draft)
+		resSO, errSO := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", finalPayloadBytes)
 
 		if errSO != nil || strings.Contains(string(resSO), "exc_type") {
 			fmt.Println("❌ GAGAL MEMBUAT SO DARI WEBHOOK. Respons ERPNext:", string(resSO))
@@ -201,7 +215,7 @@ func MidtransWebhook(c *fiber.Ctx) error {
 
 		database.Rdb.Del(database.Ctx, redisKey)
 
-		fmt.Println("✅ [SUKSES] Pesanan Lunas & Sales Order Berhasil Dibuat di ERPNext! ID Transaksi:", orderID)
+		fmt.Println("✅ [SUKSES] Pesanan Lunas via Midtrans! Draft SO Berhasil Dibuat dengan Ref:", orderID)
 	}
 
 	return c.SendStatus(200)
