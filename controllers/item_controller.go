@@ -229,10 +229,8 @@ type RawPricingRuleResponse struct {
 // }
 
 func GetItems(c *fiber.Ctx) error {
-	// Saya ubah nama key Redis agar tidak bertabrakan dengan cache data lama
 	redisKey := "items:catalog_simple"
 	
-	// 1. Cek Cache Redis
 	cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
 	if err == nil {
 		var result []models.ItemGroup
@@ -245,13 +243,12 @@ func GetItems(c *fiber.Ctx) error {
 		fmt.Println("Error baca Redis GetItems:", err)
 	}
 
-	// 2. Ambil Master Item dari ERPNext (Hanya ambil field yang diperlukan)
 	fieldsParam := `["name","item_name","item_group","image","variant_of"]`
 	itemEndpoint := `/api/resource/Item?fields=` + url.QueryEscape(fieldsParam) + `&limit=1000`
 
 	itemRes, err := erpnext.ERPNextReq("GET", itemEndpoint, nil)
 	if err != nil {
-		fmt.Println("❌ ERROR GET ITEMS ASLI:", err)
+		fmt.Println("ERROR GET ITEMS ASLI:", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Gagal mengambil data Item dari ERPNext"})
 	}
 
@@ -265,14 +262,11 @@ func GetItems(c *fiber.Ctx) error {
 
 	itemGroupMap := make(map[string]*models.ItemGroup)
 
-	// 3. Mapping Kategori & Template
 	for _, item := range rawItems.Data {
-		// Lewati bahan baku
 		if strings.HasPrefix(strings.ToUpper(item.Name), "RM-") {
 			continue
 		}
 
-		// Hanya proses jika item tersebut adalah Template (bukan varian)
 		if item.VariantOf == "" {
 			// Buat grup baru jika belum ada
 			if itemGroupMap[item.ItemGroup] == nil {
@@ -282,7 +276,6 @@ func GetItems(c *fiber.Ctx) error {
 				}
 			}
 
-			// Format URL Gambar
 			fullImageURL := ""
 			if item.Image != "" {
 				if strings.HasPrefix(item.Image, "http") {
@@ -303,7 +296,6 @@ func GetItems(c *fiber.Ctx) error {
 				ImageURL: fullImageURL,
 			}
 
-			// Masukkan ke dalam grup yang sesuai
 			itemGroupMap[item.ItemGroup].Templates = append(itemGroupMap[item.ItemGroup].Templates, t)
 		}
 	}
@@ -318,13 +310,12 @@ func GetItems(c *fiber.Ctx) error {
 	if len(finalData) > 0 {
 		dataToCache, _ := json.Marshal(finalData)
 		if errSet := database.Rdb.Set(database.Ctx, redisKey, dataToCache, 1*time.Hour).Err(); errSet != nil {
-			fmt.Println("⚠️ Peringatan: Gagal menyimpan Katalog ke Redis:", errSet)
+			fmt.Println("Gagal menyimpan Katalog ke Redis:", errSet)
 		}
 	} else {
-		fmt.Println("⚠️ Data final kosong! Batal menyimpan ke Redis untuk mencegah bug.")
+		fmt.Println("Data final kosong! Batal menyimpan ke Redis untuk mencegah bug.")
 	}
 
-	// 6. Kembalikan ke Frontend
 	return c.JSON(fiber.Map{
 		"data": finalData,
 	})
