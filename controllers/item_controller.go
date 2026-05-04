@@ -27,13 +27,13 @@ type RawItemsResponse struct {
 	} `json:"data"`
 }
 
-type RawItemDetailResponse struct {
-	Data struct {
-		Attributes []struct {
-			Attribute string `json:"attribute"`
-		} `json:"attributes"`
-	} `json:"data"`
-}
+// type RawItemDetailResponse struct {
+// 	Data struct {
+// 		Attributes []struct {
+// 			Attribute string `json:"attribute"`
+// 		} `json:"attributes"`
+// 	} `json:"data"`
+// }
 
 type RawTemplateSearchResponse struct {
 	Data []struct {
@@ -50,12 +50,12 @@ type RawVariantResponse struct {
 	} `json:"data"`
 }
 
-type RawPricingRuleItemResponse struct {
-	Data []struct {
-		Parent   string `json:"parent"`
-		ItemCode string `json:"item_code"`
-	} `json:"data"`
-}
+// type RawPricingRuleItemResponse struct {
+// 	Data []struct {
+// 		Parent   string `json:"parent"`
+// 		ItemCode string `json:"item_code"`
+// 	} `json:"data"`
+// }
 
 type RawPricingRuleResponse struct {
 	Data []struct {
@@ -65,27 +65,193 @@ type RawPricingRuleResponse struct {
 	} `json:"data"`
 }
 
-func GetItems(c *fiber.Ctx) error {
-	redisKey := "items:all_catalog"
-	cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
+// func GetItems(c *fiber.Ctx) error {
+// 	redisKey := "items:all_catalog"
+// 	cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
 
+// 	if err == nil {
+// 		var result []models.ItemGroup
+// 		if errUnmarshal := json.Unmarshal([]byte(cachedData), &result); errUnmarshal == nil {
+// 			return c.JSON(fiber.Map{
+// 				"data":   result,
+// 			})
+// 		}
+// 	} else if err != redis.Nil {
+// 		fmt.Println("Error baca Redis GetItems:", err)
+// 	}
+
+// 	fieldsParam := `["name","item_name","item_group","image","has_variants","variant_of"]`
+// 	itemEndpoint := `/api/resource/Item?fields=` + url.QueryEscape(fieldsParam) + `&limit=1000`
+
+// 	itemRes, err := erpnext.ERPNextReq("GET", itemEndpoint, nil)
+// 	if err != nil {
+// 		fmt.Println("ERROR GET ITEMS ASLI:", err)
+// 		return c.Status(500).JSON(fiber.Map{"error": "Gagal mengambil data Item dari ERPNext"})
+// 	}
+
+// 	var rawItems RawItemsResponse
+// 	if err := json.Unmarshal(itemRes, &rawItems); err != nil {
+// 		return c.Status(500).JSON(fiber.Map{"error": "Gagal parsing data Item"})
+// 	}
+
+// 	baseURL := os.Getenv("ERPNEXT_URL")
+// 	baseURL = strings.TrimSuffix(baseURL, "/")
+
+// 	itemGroupMap := make(map[string]*models.ItemGroup)
+// 	templateMap := make(map[string]*models.ItemTemplate)
+// 	var templatesWithVariants []string
+
+// 	for _, item := range rawItems.Data {
+// 		if strings.HasPrefix(strings.ToUpper(item.Name), "RM-") {
+// 			continue
+// 		}
+
+// 		if item.VariantOf == "" {
+// 			if itemGroupMap[item.ItemGroup] == nil {
+// 				itemGroupMap[item.ItemGroup] = &models.ItemGroup{
+// 					ItemGroupName: item.ItemGroup,
+// 					Templates:     []*models.ItemTemplate{},
+// 				}
+// 			}
+
+// 			fullImageURL := ""
+// 			if item.Image != "" {
+// 				if strings.HasPrefix(item.Image, "http") {
+// 					fullImageURL = item.Image
+// 				} else {
+// 					if !strings.HasPrefix(item.Image, "/") {
+// 						fullImageURL = baseURL + "/" + item.Image
+// 					} else {
+// 						fullImageURL = baseURL + item.Image
+// 					}
+// 				}
+// 			}
+
+// 			t := &models.ItemTemplate{
+// 				Name:       item.Name,
+// 				ItemName:   item.ItemName,
+// 				ImageURL:   fullImageURL,
+// 				Attributes: []models.ItemAttribute{},
+// 			}
+
+// 			itemGroupMap[item.ItemGroup].Templates = append(itemGroupMap[item.ItemGroup].Templates, t)
+// 			templateMap[item.Name] = t
+
+// 			if item.HasVariants == 1 {
+// 				templatesWithVariants = append(templatesWithVariants, item.Name)
+// 			}
+// 		}
+// 	}
+
+// 	var wg sync.WaitGroup
+// 	var mu sync.Mutex
+// 	var attrCache sync.Map
+
+// 	for _, tmplName := range templatesWithVariants {
+// 		wg.Add(1)
+
+// 		go func(name string) {
+// 			defer wg.Done()
+
+// 			safeName := url.PathEscape(name)
+// 			detailEndpoint := `/api/resource/Item/` + safeName
+
+// 			detailRes, err := erpnext.ERPNextReq("GET", detailEndpoint, nil)
+// 			if err != nil {
+// 				return
+// 			}
+
+// 			var detailData RawItemDetailResponse
+// 			if err := json.Unmarshal(detailRes, &detailData); err == nil {
+// 				var finalAttrs []models.ItemAttribute
+
+// 				for _, attr := range detailData.Data.Attributes {
+// 					attrName := attr.Attribute
+// 					var attrValues []models.AttributeValue
+
+// 					if cached, ok := attrCache.Load(attrName); ok {
+// 						attrValues = cached.([]models.AttributeValue)
+// 					} else {
+// 						safeAttrName := url.PathEscape(attrName)
+// 						masterEndpoint := `/api/resource/Item Attribute/` + safeAttrName
+// 						masterRes, err := erpnext.ERPNextReq("GET", masterEndpoint, nil)
+
+// 						if err == nil {
+// 							var masterData struct {
+// 								Data struct {
+// 									ItemAttributeValues []struct {
+// 										AttributeValue string `json:"attribute_value"`
+// 									} `json:"item_attribute_values"`
+// 								} `json:"data"`
+// 							}
+
+// 							if json.Unmarshal(masterRes, &masterData) == nil {
+// 								for _, v := range masterData.Data.ItemAttributeValues {
+// 									attrValues = append(attrValues, models.AttributeValue{
+// 										AttributeValue: v.AttributeValue,
+// 									})
+// 								}
+// 							}
+// 						}
+// 						attrCache.Store(attrName, attrValues)
+// 					}
+
+// 					finalAttrs = append(finalAttrs, models.ItemAttribute{
+// 						Attribute:       attrName,
+// 						AttributeValues: attrValues,
+// 					})
+// 				}
+
+// 				mu.Lock()
+// 				if tmpl, exists := templateMap[name]; exists {
+// 					tmpl.Attributes = finalAttrs
+// 				}
+// 				mu.Unlock()
+// 			}
+// 		}(tmplName)
+// 	}
+
+// 	wg.Wait()
+
+// 	var finalData []models.ItemGroup
+// 	for _, group := range itemGroupMap {
+// 		finalData = append(finalData, *group)
+// 	}
+
+// 	dataToCache, _ := json.Marshal(finalData)
+// 	if errSet := database.Rdb.Set(database.Ctx, redisKey, dataToCache, 1*time.Hour).Err(); errSet != nil {
+// 		fmt.Println("Peringatan: Gagal menyimpan Katalog ke Redis:", errSet)
+// 	}
+
+// 	return c.JSON(fiber.Map{
+// 		"data":   finalData,
+// 	})
+// }
+
+func GetItems(c *fiber.Ctx) error {
+	// Saya ubah nama key Redis agar tidak bertabrakan dengan cache data lama
+	redisKey := "items:catalog_simple"
+	
+	// 1. Cek Cache Redis
+	cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
 	if err == nil {
 		var result []models.ItemGroup
 		if errUnmarshal := json.Unmarshal([]byte(cachedData), &result); errUnmarshal == nil {
 			return c.JSON(fiber.Map{
-				"data":   result,
+				"data": result,
 			})
 		}
 	} else if err != redis.Nil {
 		fmt.Println("Error baca Redis GetItems:", err)
 	}
 
-	fieldsParam := `["name","item_name","item_group","image","has_variants","variant_of"]`
+	// 2. Ambil Master Item dari ERPNext (Hanya ambil field yang diperlukan)
+	fieldsParam := `["name","item_name","item_group","image","variant_of"]`
 	itemEndpoint := `/api/resource/Item?fields=` + url.QueryEscape(fieldsParam) + `&limit=1000`
 
 	itemRes, err := erpnext.ERPNextReq("GET", itemEndpoint, nil)
 	if err != nil {
-		fmt.Println("ERROR GET ITEMS ASLI:", err)
+		fmt.Println("❌ ERROR GET ITEMS ASLI:", err)
 		return c.Status(500).JSON(fiber.Map{"error": "Gagal mengambil data Item dari ERPNext"})
 	}
 
@@ -98,15 +264,17 @@ func GetItems(c *fiber.Ctx) error {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 
 	itemGroupMap := make(map[string]*models.ItemGroup)
-	templateMap := make(map[string]*models.ItemTemplate)
-	var templatesWithVariants []string
 
+	// 3. Mapping Kategori & Template
 	for _, item := range rawItems.Data {
+		// Lewati bahan baku
 		if strings.HasPrefix(strings.ToUpper(item.Name), "RM-") {
 			continue
 		}
 
+		// Hanya proses jika item tersebut adalah Template (bukan varian)
 		if item.VariantOf == "" {
+			// Buat grup baru jika belum ada
 			if itemGroupMap[item.ItemGroup] == nil {
 				itemGroupMap[item.ItemGroup] = &models.ItemGroup{
 					ItemGroupName: item.ItemGroup,
@@ -114,6 +282,7 @@ func GetItems(c *fiber.Ctx) error {
 				}
 			}
 
+			// Format URL Gambar
 			fullImageURL := ""
 			if item.Image != "" {
 				if strings.HasPrefix(item.Image, "http") {
@@ -127,104 +296,37 @@ func GetItems(c *fiber.Ctx) error {
 				}
 			}
 
+			// Buat Template Item yang ramping
 			t := &models.ItemTemplate{
-				Name:       item.Name,
-				ItemName:   item.ItemName,
-				ImageURL:   fullImageURL,
-				Attributes: []models.ItemAttribute{},
+				Name:     item.Name,
+				ItemName: item.ItemName,
+				ImageURL: fullImageURL,
 			}
 
+			// Masukkan ke dalam grup yang sesuai
 			itemGroupMap[item.ItemGroup].Templates = append(itemGroupMap[item.ItemGroup].Templates, t)
-			templateMap[item.Name] = t
-
-			if item.HasVariants == 1 {
-				templatesWithVariants = append(templatesWithVariants, item.Name)
-			}
 		}
 	}
 
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var attrCache sync.Map
-
-	for _, tmplName := range templatesWithVariants {
-		wg.Add(1)
-
-		go func(name string) {
-			defer wg.Done()
-
-			safeName := url.PathEscape(name)
-			detailEndpoint := `/api/resource/Item/` + safeName
-
-			detailRes, err := erpnext.ERPNextReq("GET", detailEndpoint, nil)
-			if err != nil {
-				return
-			}
-
-			var detailData RawItemDetailResponse
-			if err := json.Unmarshal(detailRes, &detailData); err == nil {
-				var finalAttrs []models.ItemAttribute
-
-				for _, attr := range detailData.Data.Attributes {
-					attrName := attr.Attribute
-					var attrValues []models.AttributeValue
-
-					if cached, ok := attrCache.Load(attrName); ok {
-						attrValues = cached.([]models.AttributeValue)
-					} else {
-						safeAttrName := url.PathEscape(attrName)
-						masterEndpoint := `/api/resource/Item Attribute/` + safeAttrName
-						masterRes, err := erpnext.ERPNextReq("GET", masterEndpoint, nil)
-
-						if err == nil {
-							var masterData struct {
-								Data struct {
-									ItemAttributeValues []struct {
-										AttributeValue string `json:"attribute_value"`
-									} `json:"item_attribute_values"`
-								} `json:"data"`
-							}
-
-							if json.Unmarshal(masterRes, &masterData) == nil {
-								for _, v := range masterData.Data.ItemAttributeValues {
-									attrValues = append(attrValues, models.AttributeValue{
-										AttributeValue: v.AttributeValue,
-									})
-								}
-							}
-						}
-						attrCache.Store(attrName, attrValues)
-					}
-
-					finalAttrs = append(finalAttrs, models.ItemAttribute{
-						Attribute:       attrName,
-						AttributeValues: attrValues,
-					})
-				}
-
-				mu.Lock()
-				if tmpl, exists := templateMap[name]; exists {
-					tmpl.Attributes = finalAttrs
-				}
-				mu.Unlock()
-			}
-		}(tmplName)
-	}
-
-	wg.Wait()
-
-	var finalData []models.ItemGroup
+	// 4. Susun Data Final (Cegah slice menjadi 'nil')
+	finalData := []models.ItemGroup{}
 	for _, group := range itemGroupMap {
 		finalData = append(finalData, *group)
 	}
 
-	dataToCache, _ := json.Marshal(finalData)
-	if errSet := database.Rdb.Set(database.Ctx, redisKey, dataToCache, 1*time.Hour).Err(); errSet != nil {
-		fmt.Println("Peringatan: Gagal menyimpan Katalog ke Redis:", errSet)
+	// 5. Simpan ke Redis HANYA JIKA data berhasil didapatkan
+	if len(finalData) > 0 {
+		dataToCache, _ := json.Marshal(finalData)
+		if errSet := database.Rdb.Set(database.Ctx, redisKey, dataToCache, 1*time.Hour).Err(); errSet != nil {
+			fmt.Println("⚠️ Peringatan: Gagal menyimpan Katalog ke Redis:", errSet)
+		}
+	} else {
+		fmt.Println("⚠️ Data final kosong! Batal menyimpan ke Redis untuk mencegah bug.")
 	}
 
+	// 6. Kembalikan ke Frontend
 	return c.JSON(fiber.Map{
-		"data":   finalData,
+		"data": finalData,
 	})
 }
 

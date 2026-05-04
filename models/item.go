@@ -1,16 +1,27 @@
 package models
 
 
+// type ItemGroup struct {
+// 	ItemGroupName string          `json:"item_group_name"`
+// 	Templates     []*ItemTemplate `json:"templates"`
+// }
+
+// type ItemTemplate struct {
+// 	Name       string          `json:"name"`
+// 	ItemName   string          `json:"item_name"`
+// 	ImageURL   string          `json:"image_url"`
+// 	Attributes []ItemAttribute `json:"attributes"`
+// }
+
 type ItemGroup struct {
 	ItemGroupName string          `json:"item_group_name"`
 	Templates     []*ItemTemplate `json:"templates"`
 }
 
 type ItemTemplate struct {
-	Name       string          `json:"name"`
-	ItemName   string          `json:"item_name"`
-	ImageURL   string          `json:"image_url"`
-	Attributes []ItemAttribute `json:"attributes"`
+	Name     string `json:"name"`
+	ItemName string `json:"item_name"`
+	ImageURL string `json:"image_url"`
 }
 
 type ItemAttribute struct {
