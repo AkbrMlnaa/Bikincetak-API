@@ -209,13 +209,13 @@ func MidtransWebhook(c *fiber.Ctx) error {
 		resSO, errSO := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", finalPayloadBytes)
 
 		if errSO != nil || strings.Contains(string(resSO), "exc_type") {
-			fmt.Println("❌ GAGAL MEMBUAT SO DARI WEBHOOK. Respons ERPNext:", string(resSO))
+			fmt.Println("GAGAL MEMBUAT SO DARI WEBHOOK. Respons ERPNext:", string(resSO))
 			return c.SendStatus(200)
 		}
 
 		database.Rdb.Del(database.Ctx, redisKey)
 
-		fmt.Println("✅ [SUKSES] Pesanan Lunas via Midtrans! Draft SO Berhasil Dibuat dengan Ref:", orderID)
+		fmt.Println("[SUKSES] Pesanan Lunas via Midtrans! Draft SO Berhasil Dibuat dengan Ref:", orderID)
 	}
 
 	return c.SendStatus(200)

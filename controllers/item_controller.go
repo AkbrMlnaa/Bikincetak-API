@@ -289,7 +289,6 @@ func GetItems(c *fiber.Ctx) error {
 				}
 			}
 
-			// Buat Template Item yang ramping
 			t := &models.ItemTemplate{
 				Name:     item.Name,
 				ItemName: item.ItemName,
@@ -300,13 +299,12 @@ func GetItems(c *fiber.Ctx) error {
 		}
 	}
 
-	// 4. Susun Data Final (Cegah slice menjadi 'nil')
 	finalData := []models.ItemGroup{}
 	for _, group := range itemGroupMap {
 		finalData = append(finalData, *group)
 	}
 
-	// 5. Simpan ke Redis HANYA JIKA data berhasil didapatkan
+
 	if len(finalData) > 0 {
 		dataToCache, _ := json.Marshal(finalData)
 		if errSet := database.Rdb.Set(database.Ctx, redisKey, dataToCache, 1*time.Hour).Err(); errSet != nil {
@@ -322,10 +320,7 @@ func GetItems(c *fiber.Ctx) error {
 }
 
 func GetDetailItem(c *fiber.Ctx) error {
-	paramItemName, _ := url.QueryUnescape(c.Params("name"))
-	if paramItemName == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Nama template tidak boleh kosong"})
-	}
+	paramItemName, _ := url.QueryUnescape(c.Params("name"))	
 
 	redisKey := "item_detail:" + paramItemName
 	cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
