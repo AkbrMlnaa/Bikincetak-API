@@ -40,13 +40,16 @@ func CreateOrder(c *fiber.Ctx) error {
 	var erpItems []map[string]interface{}
 
 	for _, item := range req.Items {
-		grossAmount += int64(item.Rate) * int64(item.Qty)
+		baseQty := int32(item.Qty)
+		basePrice := int64(item.Rate)
+
+		grossAmount += basePrice * int64(baseQty)
 
 		midtransItems = append(midtransItems, midtrans.ItemDetails{
 			ID:    item.ItemCode,
 			Name:  item.ItemName,
-			Price: int64(item.Rate),
-			Qty:   int32(item.Qty),
+			Price: basePrice,
+			Qty:   baseQty,
 		})
 
 		erpItems = append(erpItems, map[string]interface{}{
@@ -54,6 +57,26 @@ func CreateOrder(c *fiber.Ctx) error {
 			"qty":       item.Qty,
 			"rate":      item.Rate,
 		})
+
+		for _, addon := range item.VariantLainnya {
+			addonPrice := int64(addon.Price)
+			addonQty := baseQty
+
+			grossAmount += addonPrice * int64(addonQty)
+
+			midtransItems = append(midtransItems, midtrans.ItemDetails{
+				ID:    addon.ItemCode,
+				Name:  addon.NameVariant,
+				Price: addonPrice,
+				Qty:   addonQty,
+			})
+
+			erpItems = append(erpItems, map[string]interface{}{
+				"item_code": addon.ItemCode,
+				"qty":       float64(addonQty), 
+				"rate":      addon.Price,
+			})
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -116,7 +139,7 @@ func CreateOrder(c *fiber.Ctx) error {
 
 	if errSet := database.Rdb.Set(database.Ctx, redisKey, soPayloadBytes, 24*time.Hour).Err(); errSet != nil {
 		fmt.Println("Error set Redis:", errSet)
-		return c.Status(500).JSON(fiber.Map{"error": "Gagal menyimpan sesi keranjang belanja"})
+		return c.Status(500).JSON(fiber.Map{"error": "Gagal menyimpan sesi pesanan"})
 	}
 
 	billAddress := &midtrans.CustomerAddress{
@@ -180,32 +203,27 @@ func MidtransWebhook(c *fiber.Ctx) error {
 		return c.SendStatus(200)
 	}
 
-	// Midtrans mengirim status "capture" (kartu kredit) atau "settlement" (transfer/VA) jika lunas
 	if transactionStatus == "capture" || transactionStatus == "settlement" {
 		redisKey := "order_payload:" + orderID
 
-		// Ambil data keranjang dari Redis
 		cachedData, err := database.Rdb.Get(database.Ctx, redisKey).Result()
 		if err == redis.Nil {
-			fmt.Println("⚠️ Webhook masuk, tapi data Redis tidak ada untuk:", orderID)
+			fmt.Println("Webhook masuk, tapi data Redis tidak ada untuk:", orderID)
 			return c.SendStatus(200)
 		} else if err != nil {
 			fmt.Println("Error baca Redis di Webhook:", err)
 			return c.SendStatus(200)
 		}
 
-		// 1. Buka bungkus data Redis untuk disisipi info pembayaran
 		var payloadMap map[string]interface{}
 		json.Unmarshal([]byte(cachedData), &payloadMap)
 
-		// 2. Sisipkan ID Transaksi Midtrans ke kolom PO No (Customer Reference)
-		// Ini berfungsi sebagai bukti kuat bahwa pesanan ini sudah LUNAS via sistem
+
 		payloadMap["po_no"] = orderID
 
-		// 3. Bungkus kembali menjadi JSON
+
 		finalPayloadBytes, _ := json.Marshal(payloadMap)
 
-		// 4. Tembak ERPNext untuk Membuat Sales Order (Draft)
 		resSO, errSO := erpnext.ERPNextReq("POST", "/api/resource/Sales Order", finalPayloadBytes)
 
 		if errSO != nil || strings.Contains(string(resSO), "exc_type") {

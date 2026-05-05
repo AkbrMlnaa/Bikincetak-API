@@ -5,6 +5,7 @@ type CheckoutItem struct {
 	ItemName string  `json:"item_name"`
 	Qty      float64 `json:"qty"`
 	Rate     float64 `json:"rate"`
+	VariantLainnya []CartVariantLainnya `json:"variant_lainnya"`
 }
 
 type CheckoutRequest struct {
