@@ -135,8 +135,19 @@ func GetCart(c *fiber.Ctx) error {
 	}
 
 	var grandTotal float64
+
+	// Kalkulasi ulang total belanja dengan memasukkan harga Variant Lainnya
 	for _, item := range cart.Items {
-		grandTotal += (float64(item.Qty) * item.Price)
+		// 1. Ambil harga dasar produk
+		hargaItem := item.Price
+
+		// 2. Tambahkan semua harga Variant Lainnya (Add-ons) ke harga dasar
+		for _, addon := range item.VariantLainnya {
+			hargaItem += addon.Price
+		}
+
+		// 3. Kalikan (Harga Dasar + Total Add-on) dengan Qty pesanan
+		grandTotal += (hargaItem * float64(item.Qty))
 	}
 
 	return c.JSON(fiber.Map{
