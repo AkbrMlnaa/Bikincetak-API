@@ -22,7 +22,6 @@ func ConnectDB()  {
 	log.Println("Berhasil terhubung ke database")
 
 	err = db.AutoMigrate(
-		&models.User{},
 		&models.Cart{},
 		&models.CartItem{},
 	)

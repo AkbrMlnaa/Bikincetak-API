@@ -10,8 +10,83 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
+func GetProfile(c *fiber.Ctx) error {
+	userToken, ok := c.Locals("user").(*jwt.Token)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Sesi tidak valid"})
+	}
+	claims := userToken.Claims.(jwt.MapClaims)
+	customerID := claims["customer_id"].(string)
+
+	profile, err := erpnext.GetCustomerProfile(customerID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	filteredProfile := fiber.Map{
+		"customer_id":   profile["name"],
+		"customer_name": profile["customer_name"],
+		"email":         profile["email_id"],
+		"mobile_no":     profile["mobile_no"],
+		"customer_group": profile["customer_group"],
+		"territory":      profile["territory"],
+		"disabled":       profile["disabled"],
+	}
+
+	return c.JSON(fiber.Map{
+		"status": true,
+		"data":   filteredProfile,
+	})
+}
+
+func UpdateProfile(c *fiber.Ctx) error {
+	userToken, ok := c.Locals("user").(*jwt.Token)
+	if !ok {
+		return c.Status(401).JSON(fiber.Map{"error": "Sesi tidak valid"})
+	}
+	claims := userToken.Claims.(jwt.MapClaims)
+	customerID := claims["customer_id"].(string)
+
+	var updateData map[string]interface{}
+	if err := c.BodyParser(&updateData); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Format data tidak valid"})
+	}
+
+	allowedData := make(map[string]interface{})
+	if val, ok := updateData["customer_name"]; ok {
+		allowedData["customer_name"] = val
+	}
+	if val, ok := updateData["mobile_no"]; ok {
+		allowedData["mobile_no"] = val
+	}
+
+	if val, ok := updateData["customer_group"]; ok {
+		allowedData["customer_group"] = val
+	}
+
+	if rawPassword, ok := updateData["new_password"].(string); ok && rawPassword != "" {
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(rawPassword), 10)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Gagal memproses password baru"})
+		}
+		allowedData["custom_password"] = string(hashedPassword)
+	}
+
+	if len(allowedData) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Tidak ada data valid yang diubah"})
+	}
+
+	if err := erpnext.UpdateCustomer(customerID, allowedData); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "Profil berhasil diperbarui!",
+	})
+}
 
 func AddCustomerAddress(c *fiber.Ctx) error {
 	userToken, ok := c.Locals("user").(*jwt.Token)

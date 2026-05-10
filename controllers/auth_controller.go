@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"bikincetak-api/database"
 	"bikincetak-api/erpnext"
 	"bikincetak-api/models"
 	"os"
@@ -18,29 +17,14 @@ func Register(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Format data tidak valid"})
 	}
 
-	var existingUser models.User
-	if err := database.DB.Where("email = ?", req.Email).First(&existingUser).Error; err == nil {
-		return c.Status(400).JSON(fiber.Map{"error": "Email sudah terdaftar di sistem!"})
-	}
-
-	customerID, err := erpnext.CreateCustomer(req.Name, req.Email, req.Number)
-	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
-	}
-
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), 10)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Gagal memproses keamanan password"})
 	}
 
-	newUser := models.User{
-		Email:      req.Email,
-		Password:   string(hashedPassword),
-		CustomerId: customerID,
-	}
-
-	if err := database.DB.Create(&newUser).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Gagal menyimpan user ke database lokal"})
+	customerID, err := erpnext.CreateCustomer(req.Name, req.Email, req.Number, string(hashedPassword))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	return c.Status(201).JSON(fiber.Map{
@@ -57,22 +41,22 @@ func Login(c *fiber.Ctx) error {
 		})
 	}
 
-	var user models.User
-	if err := database.DB.Where("email =?", req.Email).First(&user).Error; err != nil {
+	customerID, dbPassword, err := erpnext.GetCustomerAuthData(req.Email)
+	if err != nil {
 		return c.Status(401).JSON(fiber.Map{
 			"error": "Email atau Password salah",
 		})
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(dbPassword), []byte(req.Password)); err != nil {
 		return c.Status(401).JSON(fiber.Map{
 			"error": "Email atau Password salah",
 		})
 	}
 
 	claims := jwt.MapClaims{
-		"email":       user.Email,
-		"customer_id": user.CustomerId,
+		"email":       req.Email,
+		"customer_id": customerID,
 		"expired":     time.Now().Add(time.Hour * 24).Unix(),
 	}
 
@@ -82,14 +66,36 @@ func Login(c *fiber.Ctx) error {
 	t, err := token.SignedString([]byte(secret))
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{
-			"error": "gagal menggenerate token",
+			"error": "Gagal menggenerate token",
 		})
 	}
 
+	cookie := new(fiber.Cookie)
+	cookie.Name = "jwt"
+	cookie.Value = t
+	cookie.Expires = time.Now().Add(24 * time.Hour)
+	cookie.HTTPOnly = true 
+	cookie.Secure = false  
+	cookie.SameSite = "Lax"
+
+	c.Cookie(cookie) 
+
 	return c.JSON(fiber.Map{
-		"status": true,
-		"token":  t,
+		"status":  true,
+		"message": "Login sukses",
 	})
 }
 
+func Logout(c *fiber.Ctx) error {
+	cookie := new(fiber.Cookie)
+	cookie.Name = "jwt"
+	cookie.Value = ""
+	cookie.Expires = time.Now().Add(-time.Hour) // Set waktu mundur agar browser otomatis menghapusnya
+	cookie.HTTPOnly = true
 
+	c.Cookie(cookie)
+
+	return c.JSON(fiber.Map{
+		"message": "Logout berhasil",
+	})
+}
