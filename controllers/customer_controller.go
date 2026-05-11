@@ -198,38 +198,74 @@ func UpdateCustomerAddress(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "ID Alamat tidak boleh kosong"})
 	}
 
+	userToken, ok := c.Locals("user").(*jwt.Token)
+	if !ok || userToken == nil {
+		return c.Status(401).JSON(fiber.Map{"error": "Akses ditolak, token tidak valid."})
+	}
+	claims := userToken.Claims.(jwt.MapClaims)
+	customerID := fmt.Sprintf("%v", claims["customer_id"])
+
 	var req models.UpdateAddressRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Format request tidak valid"})
 	}
 
+	checkEndpoint := "/api/resource/Address/" + addressName
+	resCheck, errCheck := erpnext.ERPNextReq("GET", checkEndpoint, nil)
+	
+	if errCheck != nil || strings.Contains(string(resCheck), "exc_type") {
+		return c.Status(404).JSON(fiber.Map{"error": "Alamat tidak ditemukan"})
+	}
+
+	var addressData struct {
+		Data struct {
+			Links []struct {
+				LinkDoctype string `json:"link_doctype"`
+				LinkName    string `json:"link_name"`
+			} `json:"links"`
+		} `json:"data"`
+	}
+	json.Unmarshal(resCheck, &addressData)
+
+	isOwner := false
+	for _, link := range addressData.Data.Links {
+		if link.LinkDoctype == "Customer" && link.LinkName == customerID {
+			isOwner = true
+			break
+		}
+	}
+
+	if !isOwner {
+		return c.Status(403).JSON(fiber.Map{"error": "Anda tidak memiliki akses untuk mengubah alamat ini!"})
+	}
+
 	updatePayload := map[string]interface{}{}
-	if req.AddressLine1 != "" {
-		updatePayload["address_line1"] = req.AddressLine1
-	}
-	if req.City != "" {
-		updatePayload["city"] = req.City
-	}
-	if req.Phone != "" {
-		updatePayload["phone"] = req.Phone
-	}
-	if req.Postcode != "" {
-		updatePayload["pincode"] = req.Postcode
-	}
+	
+	if req.AddressTitle != ""  { updatePayload["address_title"] = req.AddressTitle }
+	if req.AddressType != ""   { updatePayload["address_type"] = req.AddressType }
+	if req.AddressLine1 != ""  { updatePayload["address_line1"] = req.AddressLine1 }
+	if req.City != ""          { updatePayload["city"] = req.City }
+	if req.State != ""         { updatePayload["state"] = req.State }
+	if req.Pincode != ""       { updatePayload["pincode"] = req.Pincode }
+	if req.Country != ""       { updatePayload["country"] = req.Country }
+	if req.Phone != ""         { updatePayload["phone"] = req.Phone }
+
+	if req.CityID != ""        { updatePayload["custom_city_id"] = req.CityID }
+	if req.ProvinceID != ""    { updatePayload["custom_province_id"] = req.ProvinceID }
+	if req.SubdistrictID != "" { updatePayload["custom_subdistrict_id"] = req.SubdistrictID }
 
 	payloadBytes, _ := json.Marshal(updatePayload)
 
-	endpoint := "/api/resource/Address/" + addressName
-	res, err := erpnext.ERPNextReq("PUT", endpoint, payloadBytes)
-	
+	res, err := erpnext.ERPNextReq("PUT", checkEndpoint, payloadBytes)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Gagal menghubungi server ERPNext"})
 	}
 
 	if strings.Contains(string(res), "exc_type") {
-		fmt.Println(string(res))
+		fmt.Println("[ERPNEXT UPDATE ERROR]:", string(res))
 		return c.Status(400).JSON(fiber.Map{
-			"error": "Gagal memperbarui alamat. Pastikan ID alamat valid.",
+			"error": "Gagal memperbarui alamat. Cek kembali format data.",
+			"detail": json.RawMessage(res),
 		})
 	}
 
